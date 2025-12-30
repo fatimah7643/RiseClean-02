@@ -7,8 +7,8 @@ require_once 'includes/db_connect.php';
 require_once 'includes/functions.php';
 
 $page = isset($_GET['page']) ? cleanInput($_GET['page']) : 'dashboard';
-$allowedPages = ['dashboard', 'profile', 'users', 'settings', 'games', 'roles', 'login', 'logout'];
-$publicPages   = ['login','404']; // Halaman yang tidak butuh login
+$allowedPages = ['dashboard', 'profile', 'users', 'settings', 'games', 'roles', 'login', 'logout', 'register', 'education', 'challenges', 'leaderboard', 'rewards'];
+$publicPages   = ['login', 'register', '404']; // Halaman yang tidak butuh login
 
 // Validasi halaman
 if (!in_array($page, $allowedPages)) {
@@ -31,6 +31,9 @@ switch ($page) {
     case 'logout':
         require_once 'pages/auth/logout.php';
         break;
+    case 'register':
+        require_once 'pages/auth/register.php';
+        break;
     case '404':
         require_once 'pages/errors/404.php';
         break;
@@ -51,6 +54,18 @@ switch ($page) {
         break;
     case 'roles':
         require_once 'pages/roles/index.php';
+        break;
+    case 'education':
+        require_once 'pages/education/index.php';
+        break;
+    case 'challenges':
+        require_once 'pages/challenges/index.php';
+        break;
+    case 'leaderboard':
+        require_once 'pages/leaderboard/index.php';
+        break;
+    case 'rewards':
+        require_once 'pages/rewards/index.php';
         break;
     default:
         echo '<h1>404 - Page Not Found</h1>';

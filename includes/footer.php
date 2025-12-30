@@ -12,6 +12,7 @@
                 </div>
                 <div>
                     <p class="text-sm font-semibold text-gray-800"><?php echo SITE_NAME; ?></p>
+                    <p class="text-xs text-gray-500"><?php echo SITE_TAGLINE; ?></p>
                     <p class="text-xs text-gray-500">© <?php echo date('Y'); ?> All rights reserved</p>
                 </div>
             </div>

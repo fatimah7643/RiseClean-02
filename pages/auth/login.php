@@ -32,7 +32,7 @@ function isIPBlocked($pdo, $ipAddress) {
     $stmt = $pdo->prepare("
         SELECT COUNT(*) as failed_attempts
         FROM failed_login_attempts
-        WHERE ip_address = ? AND attempt_time > FROM_UNIXTIME(?)
+        WHERE ip_address = ? AND UNIX_TIMESTAMP(attempt_time) > ?
     ");
     $stmt->execute([$ipAddress, $windowStart]);
     $result = $stmt->fetch();
@@ -78,7 +78,7 @@ function getRemainingBlockTime() {
     $stmt = $pdo->prepare("
         SELECT COUNT(*) as failed_attempts
         FROM failed_login_attempts
-        WHERE ip_address = ? AND attempt_time > FROM_UNIXTIME(?)
+        WHERE ip_address = ? AND UNIX_TIMESTAMP(attempt_time) > ?
     ");
     $stmt->execute([$ipAddress, $windowStart]);
     $result = $stmt->fetch();
@@ -127,7 +127,7 @@ function recordFailedLoginAttempt($pdo, $ipAddress, $username) {
     $windowStart = time() - LOGIN_ATTEMPT_WINDOW; // From config
     $cleanupStmt = $pdo->prepare("
         DELETE FROM failed_login_attempts
-        WHERE attempt_time < FROM_UNIXTIME(?)
+        WHERE UNIX_TIMESTAMP(attempt_time) < ?
     ");
     $cleanupStmt->execute([$windowStart]);
 }
@@ -308,6 +308,7 @@ $_SESSION['captcha'] = $answer;
                     </svg>
                 </div>
                 <h1 class="text-2xl font-bold text-gray-800"><?php echo SITE_NAME; ?></h1>
+                <p class="text-gray-500 mt-1"><?php echo SITE_TAGLINE; ?></p>
                 <p class="text-gray-500 mt-2">Masuk ke akun Anda</p>
             </div>
 
@@ -374,6 +375,9 @@ $_SESSION['captcha'] = $answer;
             </form>
 
             <div class="mt-6 text-center text-sm text-gray-500">
+                <p>Belum punya akun? <a href="index.php?page=register" class="text-blue-600 font-semibold hover:text-blue-800">Daftar di sini</a></p>
+            </div>
+            <div class="mt-2 text-center text-sm text-gray-500">
                 <p>Demo Login: <strong>admin</strong> / <strong>admin123</strong></p>
             </div>
         </div>

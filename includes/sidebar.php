@@ -30,7 +30,39 @@
                 </a>
                 <?php endif; ?>
 
-                <h3 class="text-xs font-semibold text-gray-400 uppercase px-4 pt-1 pb-1">Data</h3>
+                <h3 class="text-xs font-semibold text-gray-400 uppercase px-4 pt-1 pb-1">Learning & Gamification</h3>
+
+                <!-- Education Modules -->
+                <a href="index.php?page=education" class="sidebar-item <?php echo $currentPage === 'education' ? 'active' : ''; ?> flex items-center space-x-3 px-4 py-3 rounded-xl cursor-pointer transition-all">
+                    <svg class="w-5 h-5 <?php echo $currentPage === 'education' ? 'text-blue-600' : 'text-gray-500'; ?>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                    </svg>
+                    <span class="font-medium text-gray-700">Education</span>
+                </a>
+
+                <!-- Challenges -->
+                <a href="index.php?page=challenges" class="sidebar-item <?php echo $currentPage === 'challenges' ? 'active' : ''; ?> flex items-center space-x-3 px-4 py-3 rounded-xl cursor-pointer transition-all">
+                    <svg class="w-5 h-5 <?php echo $currentPage === 'challenges' ? 'text-blue-600' : 'text-gray-500'; ?>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                    </svg>
+                    <span class="font-medium text-gray-700">Challenges</span>
+                </a>
+
+                <!-- Leaderboard -->
+                <a href="index.php?page=leaderboard" class="sidebar-item <?php echo $currentPage === 'leaderboard' ? 'active' : ''; ?> flex items-center space-x-3 px-4 py-3 rounded-xl cursor-pointer transition-all">
+                    <svg class="w-5 h-5 <?php echo $currentPage === 'leaderboard' ? 'text-blue-600' : 'text-gray-500'; ?>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                    <span class="font-medium text-gray-700">Leaderboard</span>
+                </a>
+
+                <!-- Rewards -->
+                <a href="index.php?page=rewards" class="sidebar-item <?php echo $currentPage === 'rewards' ? 'active' : ''; ?> flex items-center space-x-3 px-4 py-3 rounded-xl cursor-pointer transition-all">
+                    <svg class="w-5 h-5 <?php echo $currentPage === 'rewards' ? 'text-blue-600' : 'text-gray-500'; ?>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/>
+                    </svg>
+                    <span class="font-medium text-gray-700">Rewards</span>
+                </a>
 
                 <!-- Games (Admin & Manager only) -->
                 <?php if (hasRole(['admin', 'manager'])): ?>

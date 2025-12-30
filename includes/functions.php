@@ -153,3 +153,157 @@ function getImageUrl($imageName, $imageType = 'general') {
     return BASE_URL . 'assets/uploads/' . $imageType . '/' . $imageName;
 }
 
+// Award XP and points to user for completing an activity
+function awardUserPoints($userId, $itemType, $itemId) {
+    global $pdo;
+
+    // Determine XP and points based on item type
+    if ($itemType === 'module') {
+        $stmt = $pdo->prepare("SELECT xp_reward, point_reward FROM education_modules WHERE module_id = ?");
+        $stmt->execute([$itemId]);
+        $reward = $stmt->fetch();
+    } elseif ($itemType === 'challenge') {
+        $stmt = $pdo->prepare("SELECT xp_reward, point_reward FROM challenges WHERE challenge_id = ?");
+        $stmt->execute([$itemId]);
+        $reward = $stmt->fetch();
+    } else {
+        return false; // Invalid item type
+    }
+
+    if (!$reward) {
+        return false; // Item not found
+    }
+
+    // Check if user has already completed this item
+    $stmt = $pdo->prepare("
+        SELECT progress_id FROM user_progress
+        WHERE user_id = ? AND item_id = ? AND item_type = ?
+    ");
+    $stmt->execute([$userId, $itemId, $itemType]);
+    if ($stmt->fetch()) {
+        return false; // Already completed
+    }
+
+    try {
+        // Start transaction
+        $pdo->beginTransaction();
+
+        // Insert progress record
+        $stmt = $pdo->prepare("
+            INSERT INTO user_progress (user_id, item_id, item_type, is_verified)
+            VALUES (?, ?, ?, 1)
+        ");
+        $stmt->execute([$userId, $itemId, $itemType]);
+
+        // Update user's XP and points (the triggers should handle this automatically)
+        // But just in case, we'll also update directly here
+        $stmt = $pdo->prepare("
+            UPDATE users
+            SET total_xp = total_xp + ?, total_points = total_points + ?
+            WHERE id = ?
+        ");
+        $stmt->execute([$reward['xp_reward'], $reward['point_reward'], $userId]);
+
+        // Update user's level based on XP
+        updateUserLevel($userId);
+
+        // Commit transaction
+        $pdo->commit();
+
+        return true;
+    } catch (Exception $e) {
+        // Rollback on error
+        $pdo->rollback();
+        return false;
+    }
+}
+
+// Update user's level based on their XP
+function updateUserLevel($userId) {
+    global $pdo;
+
+    // Get user's current XP
+    $stmt = $pdo->prepare("SELECT total_xp FROM users WHERE id = ?");
+    $stmt->execute([$userId]);
+    $userData = $stmt->fetch();
+    $currentXP = $userData['total_xp'];
+
+    // Find the appropriate level based on XP thresholds
+    $stmt = $pdo->prepare("
+        SELECT level_id FROM levels
+        WHERE min_xp <= ?
+        ORDER BY min_xp DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$currentXP]);
+    $level = $stmt->fetch();
+
+    $newLevel = $level ? $level['level_id'] : 1;
+
+    // Update user's level
+    $stmt = $pdo->prepare("UPDATE users SET current_level = ? WHERE id = ?");
+    $stmt->execute([$newLevel, $userId]);
+}
+
+// Get user's current stats (XP, points, level)
+function getUserStats($userId) {
+    global $pdo;
+
+    $stmt = $pdo->prepare("
+        SELECT total_xp, total_points, current_level
+        FROM users
+        WHERE id = ?
+    ");
+    $stmt->execute([$userId]);
+    return $stmt->fetch();
+}
+
+// Get user's rank on the leaderboard
+function getUserRank($userId) {
+    global $pdo;
+
+    // Get the user's XP and points
+    $stmt = $pdo->prepare("SELECT total_xp, total_points FROM users WHERE id = ?");
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch();
+
+    if (!$user) return 0;
+
+    // Count how many users have more XP or same XP but more points
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as user_count
+        FROM users
+        WHERE is_active = 1
+        AND (total_xp > ? OR (total_xp = ? AND total_points > ?))
+    ");
+    $stmt->execute([$user['total_xp'], $user['total_xp'], $user['total_points']]);
+    $rank = $stmt->fetch()['user_count'] + 1;
+
+    return $rank;
+}
+
+// Get user's next level information
+function getNextLevelInfo($userLevel, $userXP) {
+    global $pdo;
+
+    if ($userLevel >= 8) { // Assuming max level is 8
+        return null; // Already at max level
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM levels WHERE level_id = ?");
+    $stmt->execute([$userLevel + 1]);
+    $nextLevel = $stmt->fetch();
+
+    if ($nextLevel) {
+        $xpToNext = $nextLevel['min_xp'] - $userXP;
+        return [
+            'level_id' => $nextLevel['level_id'],
+            'level_name' => $nextLevel['level_name'],
+            'min_xp' => $nextLevel['min_xp'],
+            'xp_needed' => $xpToNext
+        ];
+    }
+
+    return null;
+}
+

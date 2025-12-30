@@ -38,7 +38,10 @@ $alert = getAlert();
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
                     </div>
-                    <span class="text-xl font-bold text-gray-800"><?php echo SITE_NAME; ?></span>
+                    <div>
+                        <span class="text-xl font-bold text-gray-800"><?php echo SITE_NAME; ?></span>
+                        <p class="text-xs text-gray-500"><?php echo SITE_TAGLINE; ?></p>
+                    </div>
                 </div>
             </div>
             

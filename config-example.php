@@ -6,8 +6,9 @@ define('DB_PASS', '');     // Ganti dengan password database Anda
 define('DB_NAME', 'admin_panel_db');         // Ganti dengan nama database Anda
 
 // Konfigurasi Aplikasi
-define('SITE_NAME', 'L9kyuuPanel');
-define('BASE_URL', 'http://localhost/struktur-ai-template/'); // Ganti dengan URL dasar proyek Anda
+define('SITE_NAME', 'RiseClean');
+define('SITE_TAGLINE', 'Rise to a Cleaner Future');
+define('BASE_URL', 'http://localhost/RiseClean-02/'); // Ganti dengan URL dasar proyek Anda
 define('UPLOAD_PATH', __DIR__ . '/assets/uploads/');
 
 // Konfigurasi Session
