@@ -12,7 +12,7 @@ function getClientIP() {
             $ipList = explode(',', $_SERVER[$key]);
             $ip = trim($ipList[0]);
 
-            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
                 return $ip;
             }
         }
@@ -26,15 +26,13 @@ function isIPBlocked($pdo, $ipAddress) {
     $maxAttempts = LOGIN_MAX_ATTEMPTS; // From config
     $timeWindow = LOGIN_ATTEMPT_WINDOW; // From config
 
-    $windowStart = time() - $timeWindow;
-
     // Count failed attempts within the time window
     $stmt = $pdo->prepare("
         SELECT COUNT(*) as failed_attempts
         FROM failed_login_attempts
-        WHERE ip_address = ? AND UNIX_TIMESTAMP(attempt_time) > ?
+        WHERE ip_address = ? AND last_attempt > DATE_SUB(NOW(), INTERVAL ? SECOND)
     ");
-    $stmt->execute([$ipAddress, $windowStart]);
+    $stmt->execute([$ipAddress, $timeWindow]);
     $result = $stmt->fetch();
 
     $failedAttempts = $result ? $result['failed_attempts'] : 0;
@@ -66,21 +64,17 @@ function getBlockMessage($blockEndTime = null) {
 }
 
 // Calculate remaining time for block
-function getRemainingBlockTime() {
-    global $pdo, $ipAddress;
-
+function getRemainingBlockTime($pdo, $ipAddress) {
     $maxAttempts = LOGIN_MAX_ATTEMPTS; // From config
     $timeWindow = LOGIN_ATTEMPT_WINDOW; // From config
 
-    $windowStart = time() - $timeWindow;
-
     // Count failed attempts within the time window
     $stmt = $pdo->prepare("
-        SELECT COUNT(*) as failed_attempts
-        FROM failed_login_attempts
-        WHERE ip_address = ? AND UNIX_TIMESTAMP(attempt_time) > ?
+    SELECT COUNT(*) as failed_attempts
+    FROM failed_login_attempts
+    WHERE ip_address = ? AND last_attempt > DATE_SUB(NOW(), INTERVAL ? SECOND)
     ");
-    $stmt->execute([$ipAddress, $windowStart]);
+    $stmt->execute([$ipAddress, $timeWindow]);
     $result = $stmt->fetch();
 
     $failedAttempts = $result ? $result['failed_attempts'] : 0;
@@ -89,17 +83,17 @@ function getRemainingBlockTime() {
     if ($failedAttempts >= $maxAttempts) {
         // Calculate when the block will end (last failed attempt + block time)
         $stmt = $pdo->prepare("
-            SELECT UNIX_TIMESTAMP(attempt_time) as attempt_timestamp
+            SELECT last_attempt
             FROM failed_login_attempts
             WHERE ip_address = ?
-            ORDER BY attempt_time DESC
+            ORDER BY last_attempt DESC
             LIMIT 1
         ");
         $stmt->execute([$ipAddress]);
         $lastAttempt = $stmt->fetch();
 
         if ($lastAttempt) {
-            $lastAttemptTime = $lastAttempt['attempt_timestamp'];
+            $lastAttemptTime = strtotime($lastAttempt['last_attempt']);
             $blockEndTime = $lastAttemptTime + LOGIN_BLOCK_TIME;
             $remainingTime = $blockEndTime - time();
 
@@ -118,24 +112,23 @@ function getRemainingBlockTime() {
 // Record failed login attempt
 function recordFailedLoginAttempt($pdo, $ipAddress, $username) {
     $stmt = $pdo->prepare("
-        INSERT INTO failed_login_attempts (ip_address, username, attempt_time)
+        INSERT INTO failed_login_attempts (ip_address, username, last_attempt)
         VALUES (?, ?, NOW())
     ");
     $stmt->execute([$ipAddress, $username]);
 
     // Clean up old records outside the window period
-    $windowStart = time() - LOGIN_ATTEMPT_WINDOW; // From config
     $cleanupStmt = $pdo->prepare("
         DELETE FROM failed_login_attempts
-        WHERE UNIX_TIMESTAMP(attempt_time) < ?
+        WHERE last_attempt < DATE_SUB(NOW(), INTERVAL ? SECOND)
     ");
-    $cleanupStmt->execute([$windowStart]);
+    $cleanupStmt->execute([LOGIN_ATTEMPT_WINDOW]); // From config
 }
 
 $ipAddress = getClientIP();
 
 // Check if IP is blocked when loading the page
-$blockInfo = getRemainingBlockTime();
+$blockInfo = getRemainingBlockTime($pdo, $ipAddress);
 $isBlocked = ($blockInfo !== null);
 $error = $isBlocked ? getBlockMessage()['message'] : '';
 
@@ -149,7 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $captcha_session = $_SESSION['captcha'] ?? '';
 
     // Check if IP is blocked before processing anything
-    $currentBlockInfo = getRemainingBlockTime();
+    $currentBlockInfo = getRemainingBlockTime($pdo, $ipAddress);
     if ($currentBlockInfo !== null) {
         // Set error message in session to persist after redirect
         $_SESSION['login_error'] = getBlockMessage()['message'];
@@ -163,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             recordFailedLoginAttempt($pdo, $ipAddress, $username);
 
             // Check again if IP is now blocked after recording this attempt
-            $newBlockInfo = getRemainingBlockTime();
+            $newBlockInfo = getRemainingBlockTime($pdo, $ipAddress);
             if ($newBlockInfo !== null) {
                 $_SESSION['login_error'] = getBlockMessage()['message'];
                 $_SESSION['is_blocked'] = true;
@@ -178,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             recordFailedLoginAttempt($pdo, $ipAddress, $username);
 
             // Check again if IP is now blocked after recording this attempt
-            $newBlockInfo = getRemainingBlockTime();
+            $newBlockInfo = getRemainingBlockTime($pdo, $ipAddress);
             if ($newBlockInfo !== null) {
                 $_SESSION['login_error'] = getBlockMessage()['message'];
                 $_SESSION['is_blocked'] = true;
@@ -223,7 +216,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     recordFailedLoginAttempt($pdo, $ipAddress, $username);
 
                     // Check again if IP is now blocked after recording this attempt
-                    $newBlockInfo = getRemainingBlockTime();
+                    $newBlockInfo = getRemainingBlockTime($pdo, $ipAddress);
                     if ($newBlockInfo !== null) {
                         $_SESSION['login_error'] = getBlockMessage()['message'];
                         $_SESSION['is_blocked'] = true;
@@ -239,7 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 recordFailedLoginAttempt($pdo, $ipAddress, $username);
 
                 // Check again if IP is now blocked after recording this attempt
-                $newBlockInfo = getRemainingBlockTime();
+                $newBlockInfo = getRemainingBlockTime($pdo, $ipAddress);
                 if ($newBlockInfo !== null) {
                     $_SESSION['login_error'] = getBlockMessage()['message'];
                     $_SESSION['is_blocked'] = true;
@@ -266,7 +259,7 @@ unset($_SESSION['block_end_time']);
 
 // If not blocked, check if IP is blocked now (for display on page load)
 if (!$isBlocked) {
-    $blockInfo = getRemainingBlockTime();
+    $blockInfo = getRemainingBlockTime($pdo, $ipAddress);
     $isBlocked = ($blockInfo !== null);
     if ($isBlocked) {
         $blockEndtime = $blockInfo['end_time'];
@@ -280,8 +273,8 @@ if (!$isBlocked) {
 $num1 = rand(1, 50);
 $num2 = rand(1, 5);
 $operation = rand(0, 1); // 0 for addition, 1 for subtraction
-$operation_symbol = $operation === 0 ? '+' : '+';
-$answer = $operation === 0 ? $num1 + $num2 : $num1 + $num2;
+$operation_symbol = $operation === 0 ? '+' : '-';
+$answer = $operation === 0 ? $num1 + $num2 : $num1 - $num2;
 
 // Store correct answer in session
 $_SESSION['captcha'] = $answer;

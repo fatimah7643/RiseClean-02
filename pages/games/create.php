@@ -9,84 +9,69 @@ $error = '';
 $success = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $title = cleanInput($_POST['title']);
-    $description = cleanInput($_POST['description']);
-    $genre = cleanInput($_POST['genre']);
-    $release_date = !empty($_POST['release_date']) ? cleanInput($_POST['release_date']) : null;
-    $platform = cleanInput($_POST['platform']);
-    $price = !empty($_POST['price']) ? floatval($_POST['price']) : 0;
+    $question_text = cleanInput($_POST['question_text']);
+    $question_type = cleanInput($_POST['question_type']);
+    $category = cleanInput($_POST['category']);
+    $difficulty = cleanInput($_POST['difficulty']);
+    $xp_reward = (int)$_POST['xp_reward'];
+    $point_reward = (int)$_POST['point_reward'];
     $is_active = isset($_POST['is_active']) ? 1 : 0;
-
+    
     // Validation
-    if (empty($title) || empty($genre) || empty($platform)) {
-        $error = 'Semua field yang bertanda * harus diisi!';
+    if (empty($question_text) || empty($category)) {
+        $error = 'Pertanyaan dan kategori harus diisi!';
+    } elseif ($xp_reward < 0 || $point_reward < 0) {
+        $error = 'Hadiah XP dan poin harus berupa angka positif!';
     } else {
-        // Check if game with same title already exists
-        $stmt = $pdo->prepare("SELECT id FROM games WHERE title = ?");
-        $stmt->execute([$title]);
-
-        if ($stmt->fetch()) {
-            $error = 'Judul game sudah digunakan!';
-        } else {
-            // Handle image upload first if provided and valid
-            $imageFileName = null; // Default value
-            if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK && $_FILES['image']['size'] > 0) {
-                // Upload image with temporary ID (0), will be renamed with actual game ID after insertion
-                $imageFileName = uploadImage($_FILES['image'], 0, 'games');
+        try {
+            // Start transaction
+            $pdo->beginTransaction();
+            
+            // Insert the question
+            $stmt = $pdo->prepare("
+                INSERT INTO quiz_questions (question_text, question_type, category, difficulty, xp_reward, point_reward, created_by, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            
+            $stmt->execute([$question_text, $question_type, $category, $difficulty, $xp_reward, $point_reward, $_SESSION['user_id'], $is_active]);
+            $question_id = $pdo->lastInsertId();
+            
+            // Handle choices for multiple choice questions
+            if ($question_type === 'multiple_choice') {
+                $choices = $_POST['choices'] ?? [];
+                $correct_choice = (int)($_POST['correct_choice'] ?? 0);
                 
-                if (!$imageFileName) {
-                    $error = 'Gagal mengupload gambar! Pastikan file adalah gambar valid (JPG, PNG, GIF) dengan ukuran maksimal 5MB.';
-                }
-            }
-
-            if (empty($error)) {
-                // Insert game into database first
-                $stmt = $pdo->prepare("
-                    INSERT INTO games (title, description, genre, release_date, platform, price, image, is_active) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ");
-
-                if ($stmt->execute([$title, $description, $genre, $release_date, $platform, $price, $imageFileName, $is_active])) {
-                    $gameId = $pdo->lastInsertId();
-
-                    // If image was uploaded successfully, update its filename to include the actual game ID
-                    if ($imageFileName) {
-                        // Regenerate filename with actual game ID
-                        $newImageFileName = $gameId . '_' . time() . '.' . pathinfo($imageFileName, PATHINFO_EXTENSION);
-                        $oldPath = UPLOAD_PATH . 'games/' . $imageFileName;
-                        $newPath = UPLOAD_PATH . 'games/' . $newImageFileName;
+                for ($i = 0; $i < count($choices); $i++) {
+                    if (!empty(trim($choices[$i]))) {
+                        $choice_text = cleanInput($choices[$i]);
+                        $is_correct = ($i + 1) == $correct_choice ? 1 : 0;
                         
-                        if (rename($oldPath, $newPath)) {
-                            // Update database record with new filename
-                            $stmt = $pdo->prepare("UPDATE games SET image = ? WHERE id = ?");
-                            $stmt->execute([$newImageFileName, $gameId]);
-                            
-                            $imageFileName = $newImageFileName; // Update variable to new filename
-                        } else {
-                            // If rename fails, use the temporary filename with game ID
-                            $stmt = $pdo->prepare("UPDATE games SET image = ? WHERE id = ?");
-                            $stmt->execute([$imageFileName, $gameId]);
-                        }
+                        $choice_stmt = $pdo->prepare("
+                            INSERT INTO quiz_choices (question_id, choice_text, is_correct, choice_order)
+                            VALUES (?, ?, ?, ?)
+                        ");
+                        $choice_stmt->execute([$question_id, $choice_text, $is_correct, $i + 1]);
                     }
-
-                    logActivity($_SESSION['user_id'], 'create_game', "Created new game: $title");
-                    setAlert('success', 'Game berhasil ditambahkan!');
-                    redirect('index.php?page=games');
-                } else {
-                    // If image was uploaded but game insertion failed, delete the uploaded image
-                    if ($imageFileName) {
-                        deleteImage($imageFileName, 'games');
-                    }
-                    $error = 'Gagal menambahkan game!';
                 }
             }
+            
+            // Commit transaction
+            $pdo->commit();
+            
+            logActivity($_SESSION['user_id'], 'create_quiz_question', "Created new quiz question: $question_text");
+            setAlert('success', 'Pertanyaan kuis berhasil ditambahkan!');
+            redirect('index.php?page=games');
+        } catch (Exception $e) {
+            // Rollback transaction on error
+            $pdo->rollback();
+            $error = 'Gagal menambahkan pertanyaan kuis: ' . $e->getMessage();
         }
     }
 }
 
-// Get all genres and platforms for dropdowns
-$genres = $pdo->query("SELECT DISTINCT genre FROM games WHERE genre IS NOT NULL ORDER BY genre")->fetchAll();
-$platforms = $pdo->query("SELECT DISTINCT platform FROM games WHERE platform IS NOT NULL ORDER BY platform")->fetchAll();
+// Get all categories and difficulties for dropdowns
+$categories = $pdo->query("SELECT DISTINCT category FROM quiz_questions WHERE category IS NOT NULL ORDER BY category")->fetchAll();
+$difficulties = $pdo->query("SELECT DISTINCT difficulty FROM quiz_questions ORDER BY FIELD(difficulty, 'easy', 'medium', 'hard')")->fetchAll();
 ?>
 
 <div class="mb-6">
@@ -97,119 +82,136 @@ $platforms = $pdo->query("SELECT DISTINCT platform FROM games WHERE platform IS 
             </svg>
         </a>
         <div>
-            <h1 class="text-3xl font-bold text-gray-800">Tambah Game Baru</h1>
-            <p class="text-gray-500 mt-1">Tambahkan game ke koleksi</p>
+            <h1 class="text-3xl font-bold text-gray-800">Tambah Pertanyaan Kuis Baru</h1>
+            <p class="text-gray-500 mt-1">Tambahkan pertanyaan untuk kuis edukasi</p>
         </div>
     </div>
 </div>
 
 <?php if ($error): ?>
 <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-xl mb-4">
-    <?php echo $error; ?>
+    <?php echo htmlspecialchars($error); ?>
 </div>
 <?php endif; ?>
 
 <div class="bg-white rounded-2xl shadow-sm p-6">
-    <form method="POST" enctype="multipart/form-data" class="space-y-6">
+    <form method="POST" class="space-y-6">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Judul *</label>
-                <input type="text" name="title" required 
-                       value="<?php echo isset($_POST['title']) ? htmlspecialchars($_POST['title']) : ''; ?>"
-                       class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
+            <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Pertanyaan *</label>
+                <textarea name="question_text" required rows="3"
+                          class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"><?php echo isset($_POST['question_text']) ? htmlspecialchars($_POST['question_text']) : ''; ?></textarea>
             </div>
 
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Genre *</label>
-                <select name="genre" required
+                <label class="block text-sm font-medium text-gray-700 mb-2">Tipe Pertanyaan</label>
+                <select name="question_type" id="question_type" required
                         class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
-                    <option value="">Pilih Genre</option>
-                    <?php foreach ($genres as $genre_item): ?>
-                        <option value="<?php echo $genre_item['genre']; ?>" 
-                                <?php echo (isset($_POST['genre']) && $_POST['genre'] === $genre_item['genre']) ? 'selected' : ''; ?>>
-                            <?php echo ucfirst($genre_item['genre']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                    <!-- Default options if no records exist yet -->
-                    <option value="Action" <?php echo (isset($_POST['genre']) && $_POST['genre'] === 'Action') ? 'selected' : ''; ?>>Action</option>
-                    <option value="Adventure" <?php echo (isset($_POST['genre']) && $_POST['genre'] === 'Adventure') ? 'selected' : ''; ?>>Adventure</option>
-                    <option value="RPG" <?php echo (isset($_POST['genre']) && $_POST['genre'] === 'RPG') ? 'selected' : ''; ?>>RPG</option>
-                    <option value="Strategy" <?php echo (isset($_POST['genre']) && $_POST['genre'] === 'Strategy') ? 'selected' : ''; ?>>Strategy</option>
+                    <option value="multiple_choice" <?php echo (isset($_POST['question_type']) && $_POST['question_type'] === 'multiple_choice') ? 'selected' : ''; ?>>Pilihan Ganda</option>
+                    <option value="true_false" <?php echo (isset($_POST['question_type']) && $_POST['question_type'] === 'true_false') ? 'selected' : ''; ?>>Benar/Salah</option>
+                    <option value="short_answer" <?php echo (isset($_POST['question_type']) && $_POST['question_type'] === 'short_answer') ? 'selected' : ''; ?>>Jawaban Singkat</option>
                 </select>
             </div>
 
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Platform *</label>
-                <select name="platform" required
+                <label class="block text-sm font-medium text-gray-700 mb-2">Kategori *</label>
+                <select name="category" required
                         class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
-                    <option value="">Pilih Platform</option>
-                    <?php foreach ($platforms as $platform_item): ?>
-                        <option value="<?php echo $platform_item['platform']; ?>" 
-                                <?php echo (isset($_POST['platform']) && $_POST['platform'] === $platform_item['platform']) ? 'selected' : ''; ?>>
-                            <?php echo $platform_item['platform']; ?>
+                    <option value="">Pilih Kategori</option>
+                    <?php foreach ($categories as $category_item): ?>
+                        <option value="<?php echo $category_item['category']; ?>"
+                                <?php echo (isset($_POST['category']) && $_POST['category'] === $category_item['category']) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($category_item['category']); ?>
                         </option>
                     <?php endforeach; ?>
                     <!-- Default options if no records exist yet -->
-                    <option value="PC" <?php echo (isset($_POST['platform']) && $_POST['platform'] === 'PC') ? 'selected' : ''; ?>>PC</option>
-                    <option value="PlayStation 5" <?php echo (isset($_POST['platform']) && $_POST['platform'] === 'PlayStation 5') ? 'selected' : ''; ?>>PlayStation 5</option>
-                    <option value="Xbox Series X/S" <?php echo (isset($_POST['platform']) && $_POST['platform'] === 'Xbox Series X/S') ? 'selected' : ''; ?>>Xbox Series X/S</option>
-                    <option value="Nintendo Switch" <?php echo (isset($_POST['platform']) && $_POST['platform'] === 'Nintendo Switch') ? 'selected' : ''; ?>>Nintendo Switch</option>
+                    <option value="Basics" <?php echo (isset($_POST['category']) && $_POST['category'] === 'Basics') ? 'selected' : ''; ?>>Basics</option>
+                    <option value="Recycling" <?php echo (isset($_POST['category']) && $_POST['category'] === 'Recycling') ? 'selected' : ''; ?>>Recycling</option>
+                    <option value="Organic Waste" <?php echo (isset($_POST['category']) && $_POST['category'] === 'Organic Waste') ? 'selected' : ''; ?>>Organic Waste</option>
+                    <option value="Special Waste" <?php echo (isset($_POST['category']) && $_POST['category'] === 'Special Waste') ? 'selected' : ''; ?>>Special Waste</option>
                 </select>
             </div>
 
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Harga</label>
-                <input type="number" name="price" step="0.01" min="0" 
-                       value="<?php echo isset($_POST['price']) ? htmlspecialchars($_POST['price']) : '0.00'; ?>"
+                <label class="block text-sm font-medium text-gray-700 mb-2">Tingkat Kesulitan</label>
+                <select name="difficulty" required
+                        class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
+                    <option value="easy" <?php echo (isset($_POST['difficulty']) && $_POST['difficulty'] === 'easy') ? 'selected' : ''; ?>>Mudah</option>
+                    <option value="medium" <?php echo (isset($_POST['difficulty']) && $_POST['difficulty'] === 'medium') ? 'selected' : ''; ?>>Sedang</option>
+                    <option value="hard" <?php echo (isset($_POST['difficulty']) && $_POST['difficulty'] === 'hard') ? 'selected' : ''; ?>>Sulit</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Hadiah XP</label>
+                <input type="number" name="xp_reward" min="0" required
+                       value="<?php echo isset($_POST['xp_reward']) ? (int)$_POST['xp_reward'] : 10; ?>"
                        class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
             </div>
 
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Tanggal Rilis</label>
-                <input type="date" name="release_date" 
-                       value="<?php echo isset($_POST['release_date']) ? htmlspecialchars($_POST['release_date']) : ''; ?>"
+                <label class="block text-sm font-medium text-gray-700 mb-2">Hadiah Poin</label>
+                <input type="number" name="point_reward" min="0" required
+                       value="<?php echo isset($_POST['point_reward']) ? (int)$_POST['point_reward'] : 5; ?>"
                        class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
             </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                <div class="flex items-center space-x-3 mt-3">
-                    <input type="checkbox" name="is_active" id="is_active" value="1" 
+            <div class="md:col-span-2 flex items-center">
+                <label class="flex items-center">
+                    <input type="checkbox" name="is_active" value="1"
                            <?php echo (!isset($_POST['is_active']) || $_POST['is_active']) ? 'checked' : ''; ?>
-                           class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
-                    <label for="is_active" class="text-sm text-gray-700">Game Aktif</label>
-                </div>
+                           class="rounded border-gray-300 text-blue-600 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50">
+                    <span class="ml-2 text-sm text-gray-700">Aktifkan Pertanyaan</span>
+                </label>
             </div>
         </div>
 
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">Deskripsi</label>
-            <textarea name="description" rows="4"
-                      class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"><?php echo isset($_POST['description']) ? htmlspecialchars($_POST['description']) : ''; ?></textarea>
-        </div>
-
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">Gambar Game</label>
-            <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-xl">
-                <div class="space-y-1 text-center">
-                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
-                        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                    <div class="flex text-sm text-gray-600">
-                        <label for="image" class="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-blue-500">
-                            <span>Unggah file</span>
-                            <input id="image" name="image" type="file" accept="image/*" class="sr-only">
-                        </label>
-                        <p class="pl-1">atau seret dan lepas</p>
+        <!-- Multiple Choice Options -->
+        <div id="multiple-choice-section" class="border-t pt-6 mt-6">
+            <h3 class="text-lg font-bold text-gray-800 mb-4">Pilihan Jawaban</h3>
+            
+            <div id="choices-container">
+                <?php
+                $num_choices = isset($_POST['choices']) ? count($_POST['choices']) : 4;
+                for ($i = 0; $i < $num_choices; $i++):
+                ?>
+                <div class="choice-row flex items-center mb-3">
+                    <div class="flex-1 mr-3">
+                        <input type="text" name="choices[]" 
+                               value="<?php echo isset($_POST['choices'][$i]) ? htmlspecialchars($_POST['choices'][$i]) : ''; ?>"
+                               placeholder="Pilihan <?php echo $i + 1; ?>"
+                               class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
                     </div>
-                    <p class="text-xs text-gray-500">PNG, JPG, GIF maksimal 5MB</p>
+                    <div class="flex items-center">
+                        <input type="radio" name="correct_choice" value="<?php echo $i + 1; ?>"
+                               <?php echo (isset($_POST['correct_choice']) && $_POST['correct_choice'] == $i + 1) ? 'checked' : ''; ?>
+                               class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
+                        <label class="ml-2 text-sm text-gray-700">Benar</label>
+                    </div>
+                    <?php if ($i >= 2): ?>
+                    <button type="button" class="ml-3 text-red-600 hover:text-red-800 remove-choice">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    </button>
+                    <?php endif; ?>
                 </div>
+                <?php endfor; ?>
+            </div>
+            
+            <div class="mt-4">
+                <button type="button" id="add-choice" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-xl transition-colors inline-flex items-center">
+                    <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    Tambah Pilihan
+                </button>
             </div>
         </div>
 
         <div class="flex space-x-3 pt-4 border-t">
             <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-xl transition-colors">
-                Simpan Game
+                Simpan Pertanyaan
             </button>
             <a href="index.php?page=games" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-6 rounded-xl transition-colors inline-block">
                 Batal
@@ -220,116 +222,69 @@ $platforms = $pdo->query("SELECT DISTINCT platform FROM games WHERE platform IS 
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const fileInput = document.getElementById('image');
-    const uploadArea = fileInput.closest('.mt-1');
+    const questionTypeSelect = document.getElementById('question_type');
+    const multipleChoiceSection = document.getElementById('multiple-choice-section');
     
-    // Handle file selection
-    fileInput.addEventListener('change', function() {
-        if (this.files && this.files[0]) {
-            const file = this.files[0];
-            const fileType = file.type.split('/')[0]; // Get file type (image, video, etc.)
-            
-            // Check if it's an image
-            if (fileType === 'image') {
-                // Change border color to indicate file is selected
-                uploadArea.classList.remove('border-gray-300');
-                uploadArea.classList.add('border-green-500', 'bg-green-50');
-                
-                // Update text to show filename
-                const textElements = uploadArea.querySelectorAll('.text-sm');
-                if (textElements.length > 1) {
-                    textElements[1].innerHTML = `<span class="text-green-600 font-medium">File dipilih: ${file.name}</span>`;
-                } else {
-                    // If no existing text element, create one
-                    const filenameDiv = document.createElement('div');
-                    filenameDiv.className = 'text-sm text-green-600 font-medium mt-2';
-                    filenameDiv.textContent = `File dipilih: ${file.name}`;
-                    uploadArea.appendChild(filenameDiv);
-                }
-                
-                // Add preview of the image if possible
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    // Remove any previous preview
-                    const existingPreview = uploadArea.querySelector('.image-preview');
-                    if (existingPreview) {
-                        existingPreview.remove();
-                    }
-                    
-                    // Create preview container
-                    const previewContainer = document.createElement('div');
-                    previewContainer.className = 'image-preview mt-3';
-                    previewContainer.style.maxWidth = '200px';
-                    previewContainer.style.maxHeight = '200px';
-                    
-                    const previewImg = document.createElement('img');
-                    previewImg.src = e.target.result;
-                    previewImg.alt = 'Preview Gambar';
-                    previewImg.className = 'w-full h-auto rounded border';
-                    previewImg.style.maxWidth = '100%';
-                    previewImg.style.maxHeight = '200px';
-                    previewImg.style.objectFit = 'contain';
-                    
-                    previewContainer.appendChild(previewImg);
-                    uploadArea.appendChild(previewContainer);
-                }
-                reader.readAsDataURL(file);
-            } else {
-                // Reset to original state if not an image
-                resetUploadArea();
-                alert('Silakan pilih file gambar (JPG, PNG, GIF).');
-            }
+    // Show/hide multiple choice section based on question type
+    function toggleChoiceSection() {
+        if (questionTypeSelect.value === 'multiple_choice') {
+            multipleChoiceSection.style.display = 'block';
         } else {
-            // Reset if no file is selected (user canceled)
-            resetUploadArea();
-        }
-    });
-    
-    // Function to reset upload area to original state
-    function resetUploadArea() {
-        uploadArea.classList.remove('border-green-500', 'bg-green-50');
-        uploadArea.classList.add('border-gray-300');
-        
-        // Remove preview if exists
-        const existingPreview = uploadArea.querySelector('.image-preview');
-        if (existingPreview) {
-            existingPreview.remove();
-        }
-        
-        // Remove filename text and add back original text
-        const textElements = uploadArea.querySelectorAll('.text-sm');
-        if (textElements.length > 1) {
-            textElements[1].innerHTML = '<span>Unggah file</span>';
+            multipleChoiceSection.style.display = 'none';
         }
     }
     
-    // Handle drag and drop functionality
-    uploadArea.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        this.classList.add('border-blue-500', 'bg-blue-50');
+    questionTypeSelect.addEventListener('change', toggleChoiceSection);
+    toggleChoiceSection(); // Initialize on page load
+    
+    // Add choice functionality
+    document.getElementById('add-choice').addEventListener('click', function() {
+        const container = document.getElementById('choices-container');
+        const choiceCount = container.children.length;
+        
+        const choiceDiv = document.createElement('div');
+        choiceDiv.className = 'choice-row flex items-center mb-3';
+        choiceDiv.innerHTML = `
+            <div class="flex-1 mr-3">
+                <input type="text" name="choices[]" 
+                       placeholder="Pilihan ${choiceCount + 1}"
+                       class="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
+            </div>
+            <div class="flex items-center">
+                <input type="radio" name="correct_choice" value="${choiceCount + 1}"
+                       class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
+                <label class="ml-2 text-sm text-gray-700">Benar</label>
+            </div>
+            <button type="button" class="ml-3 text-red-600 hover:text-red-800 remove-choice">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+            </button>
+        `;
+        
+        container.appendChild(choiceDiv);
+        
+        // Add event listener to the new remove button
+        choiceDiv.querySelector('.remove-choice').addEventListener('click', function() {
+            if (container.children.length > 2) { // Keep at least 2 choices
+                container.removeChild(choiceDiv);
+            } else {
+                alert('Minimal harus ada 2 pilihan jawaban');
+            }
+        });
     });
     
-    uploadArea.addEventListener('dragleave', function() {
-        this.classList.remove('border-blue-500', 'bg-blue-50');
-        
-        // Return to green if file already selected
-        if (fileInput.files.length > 0) {
-            this.classList.add('border-green-500', 'bg-green-50');
-        } else {
-            this.classList.add('border-gray-300');
-        }
-    });
-    
-    uploadArea.addEventListener('drop', function(e) {
-        e.preventDefault();
-        this.classList.remove('border-blue-500', 'bg-blue-50');
-        
-        if (e.dataTransfer.files.length) {
-            fileInput.files = e.dataTransfer.files;
+    // Remove choice functionality
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.remove-choice')) {
+            const choiceRow = e.target.closest('.choice-row');
+            const container = document.getElementById('choices-container');
             
-            // Trigger change event to handle the file
-            const event = new Event('change', { bubbles: true });
-            fileInput.dispatchEvent(event);
+            if (container.children.length > 2) { // Keep at least 2 choices
+                container.removeChild(choiceRow);
+            } else {
+                alert('Minimal harus ada 2 pilihan jawaban');
+            }
         }
     });
 });

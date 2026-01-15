@@ -157,8 +157,44 @@ function getImageUrl($imageName, $imageType = 'general') {
 function awardUserPoints($userId, $itemType, $itemId) {
     global $pdo;
 
-    // Determine XP and points based on item type
+    // For education modules, check if the user has completed the associated quiz
     if ($itemType === 'module') {
+        // Check if the module has associated quiz questions
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) as quiz_count
+            FROM quiz_questions
+            WHERE module_id = ? AND is_active = 1
+        ");
+        $stmt->execute([$itemId]);
+        $quizCount = $stmt->fetch()['quiz_count'];
+
+        if ($quizCount > 0) {
+            // Module has quiz questions, check if user has passed the quiz with minimum 70% score
+            $stmt = $pdo->prepare("
+                SELECT COUNT(DISTINCT qq.question_id) as total_questions,
+                       COUNT(DISTINCT uqa.question_id) as correct_answers
+                FROM quiz_questions qq
+                LEFT JOIN user_quiz_answers uqa ON qq.question_id = uqa.question_id AND uqa.user_id = ? AND uqa.is_correct = 1
+                WHERE qq.module_id = ? AND qq.is_active = 1
+            ");
+            $stmt->execute([$userId, $itemId]);
+            $result = $stmt->fetch();
+
+            // Calculate percentage of correct answers
+            $totalQuestions = $result['total_questions'];
+            $correctAnswers = $result['correct_answers'];
+
+            if ($totalQuestions > 0) {
+                $percentage = ($correctAnswers / $totalQuestions) * 100;
+
+                // User must achieve at least 70% to pass the quiz
+                if ($percentage < 70) {
+                    // User hasn't passed the quiz with minimum required score, return false
+                    return false;
+                }
+            }
+        }
+
         $stmt = $pdo->prepare("SELECT xp_reward, point_reward FROM education_modules WHERE module_id = ?");
         $stmt->execute([$itemId]);
         $reward = $stmt->fetch();
@@ -305,5 +341,75 @@ function getNextLevelInfo($userLevel, $userXP) {
     }
 
     return null;
+}
+
+// Check if user has completed the quiz for a specific module
+function hasCompletedModuleQuiz($userId, $moduleId) {
+    global $pdo;
+
+    // Check if the module has associated quiz questions
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as quiz_count
+        FROM quiz_questions
+        WHERE module_id = ? AND is_active = 1
+    ");
+    $stmt->execute([$moduleId]);
+    $quizCount = $stmt->fetch()['quiz_count'];
+
+    // If no quiz questions, consider the quiz as completed
+    if ($quizCount == 0) {
+        return true;
+    }
+
+    // Check if user has passed the quiz with minimum 70% score
+    $stmt = $pdo->prepare("
+        SELECT COUNT(DISTINCT qq.question_id) as total_questions,
+               COUNT(DISTINCT uqa.question_id) as correct_answers
+        FROM quiz_questions qq
+        LEFT JOIN user_quiz_answers uqa ON qq.question_id = uqa.question_id AND uqa.user_id = ? AND uqa.is_correct = 1
+        WHERE qq.module_id = ? AND qq.is_active = 1
+    ");
+    $stmt->execute([$userId, $moduleId]);
+    $result = $stmt->fetch();
+
+    // Calculate percentage of correct answers
+    $totalQuestions = $result['total_questions'];
+    $correctAnswers = $result['correct_answers'];
+
+    if ($totalQuestions > 0) {
+        $percentage = ($correctAnswers / $totalQuestions) * 100;
+
+        // User must achieve at least 70% to pass the quiz
+        return $percentage >= 70;
+    }
+
+    return false;
+}
+
+// Get the number of quiz questions for a module
+function getModuleQuizCount($moduleId) {
+    global $pdo;
+
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as quiz_count
+        FROM quiz_questions
+        WHERE module_id = ? AND is_active = 1
+    ");
+    $stmt->execute([$moduleId]);
+    return $stmt->fetch()['quiz_count'];
+}
+
+// Get the number of quiz questions answered correctly by a user for a module
+function getModuleQuizCorrectAnswers($userId, $moduleId) {
+    global $pdo;
+
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as correct_answers
+        FROM quiz_questions qq
+        JOIN user_quiz_answers uqa ON qq.question_id = uqa.question_id
+        WHERE qq.module_id = ? AND uqa.user_id = ? AND uqa.is_correct = 1 AND qq.is_active = 1
+    ");
+    $stmt->execute([$moduleId, $userId]);
+    return $stmt->fetch()['correct_answers'];
 }
 

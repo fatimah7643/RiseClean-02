@@ -3,7 +3,7 @@
 define('DB_HOST', 'localhost');
 define('DB_USER', 'root');         // Ganti dengan user database Anda
 define('DB_PASS', '');     // Ganti dengan password database Anda
-define('DB_NAME', 'admin_panel_db');         // Ganti dengan nama database Anda
+define('DB_NAME', 'riseclean_db');         // Ganti dengan nama database Anda
 
 // Konfigurasi Aplikasi
 define('SITE_NAME', 'RiseClean');
