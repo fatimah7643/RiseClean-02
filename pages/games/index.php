@@ -318,77 +318,71 @@ if (hasRole(['admin', 'manager'])) {
 
         // Process quiz submission
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_module_quiz'])) {
-            $score = 0;
             $total_questions = count($questions);
             $correct_answers = 0;
 
-            foreach ($questions as $question) {
-                $question_id = $question['question_id'];
-                $user_answer = isset($_POST["question_$question_id"]) ? (int)$_POST["question_$question_id"] : 0;
+            // Save each answer individually and calculate correct answers
+            try {
+                foreach ($questions as $question) {
+                    $question_id = $question['question_id'];
+                    $is_correct = false;
+                    $selected_choice_id = null;
+                    $answer_text = null;
+                    $points_earned = 0;
 
-                // Check if the selected choice is correct
-                if ($user_answer > 0) {
-                    $choice_stmt = $pdo->prepare("SELECT is_correct FROM quiz_choices WHERE choice_id = ?");
-                    $choice_stmt->execute([$user_answer]);
-                    $choice = $choice_stmt->fetch();
+                    if ($question['question_type'] === 'multiple_choice' || $question['question_type'] === 'true_false') {
+                        $user_answer = isset($_POST["answers"][$question_id]) ? (int)$_POST["answers"][$question_id] : 0;
 
-                    if ($choice && $choice['is_correct'] == 1) {
-                        $correct_answers++;
-                    }
-                }
-            }
+                        if ($user_answer > 0) {
+                            // Verify that the choice belongs to the question to prevent tampering
+                            $choice_stmt = $pdo->prepare("
+                                SELECT is_correct
+                                FROM quiz_choices
+                                WHERE choice_id = ? AND question_id = ?
+                            ");
+                            $choice_stmt->execute([$user_answer, $question_id]);
+                            $choice = $choice_stmt->fetch();
 
-            $percentage = $total_questions > 0 ? ($correct_answers / $total_questions) * 100 : 0;
-
-            // Save each answer individually
-            foreach ($questions as $question) {
-                $question_id = $question['question_id'];
-                $is_correct = false;
-                $selected_choice_id = null;
-                $answer_text = null;
-                $points_earned = 0;
-
-                if ($question['question_type'] === 'multiple_choice' || $question['question_type'] === 'true_false') {
-                    $user_answer = isset($_POST["question_$question_id"]) ? (int)$_POST["question_$question_id"] : 0;
-
-                    if ($user_answer > 0) {
-                        // Verify that the choice belongs to the question to prevent tampering
-                        $choice_stmt = $pdo->prepare("
-                            SELECT is_correct
-                            FROM quiz_choices
-                            WHERE choice_id = ? AND question_id = ?
-                        ");
-                        $choice_stmt->execute([$user_answer, $question_id]);
-                        $choice = $choice_stmt->fetch();
-
-                        if ($choice) {
-                            $selected_choice_id = $user_answer;
-                            if ($choice['is_correct'] == 1) {
-                                $is_correct = true;
-                                $points_earned = $question['point_reward'];
+                            if ($choice) {
+                                $selected_choice_id = $user_answer;
+                                if ($choice['is_correct'] == 1) {
+                                    $is_correct = true;
+                                    $points_earned = $question['point_reward'];
+                                    $correct_answers++; // Increment correct answers here
+                                }
                             }
                         }
+                    } elseif ($question['question_type'] === 'short_answer') {
+                        $answer_text = isset($_POST["answer_text_$question_id"]) ? cleanInput($_POST["answer_text_$question_id"]) : '';
+                        // For short answer, we would typically have a more sophisticated checking mechanism
+                        // For now, we'll set is_correct to false and points to 0
+                        // In a real implementation, you'd compare against expected answers
                     }
-                } elseif ($question['question_type'] === 'short_answer') {
-                    $answer_text = isset($_POST["answer_text_$question_id"]) ? cleanInput($_POST["answer_text_$question_id"]) : '';
-                    // For short answer, we would typically have a more sophisticated checking mechanism
-                    // For now, we'll set is_correct to false and points to 0
-                    // In a real implementation, you'd compare against expected answers
+
+                    // Record the answer
+                    $answer_stmt = $pdo->prepare("
+                        INSERT INTO user_quiz_answers (user_id, module_id, question_id, selected_choice_id, answer_text, is_correct, points_earned, xp_earned)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ");
+                    $answer_stmt->execute([
+                        $_SESSION['user_id'],
+                        $moduleId,
+                        $question_id,
+                        $selected_choice_id,
+                        $answer_text,
+                        $is_correct ? 1 : 0,
+                        $points_earned,
+                        $question['xp_reward']
+                    ]);
                 }
 
-                // Record the answer
-                $answer_stmt = $pdo->prepare("
-                    INSERT INTO user_quiz_answers (user_id, question_id, selected_choice_id, answer_text, is_correct, points_earned)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ");
-                $answer_stmt->execute([
-                    $_SESSION['user_id'],
-                    $question_id,
-                    $selected_choice_id,
-                    $answer_text,
-                    $is_correct ? 1 : 0,
-                    $points_earned
-                ]);
+                $percentage = $total_questions > 0 ? ($correct_answers / $total_questions) * 100 : 0;
+
+            } catch (PDOException $e) {
+                setAlert('error', 'Terjadi kesalahan saat menyimpan jawaban kuis: ' . $e->getMessage());
+                error_log('Database error in quiz submission: ' . $e->getMessage());
+                redirect('index.php?page=education&action=view&id=' . $moduleId);
+                exit;
             }
 
             // Show results
@@ -402,11 +396,15 @@ if (hasRole(['admin', 'manager'])) {
 
         // If quiz is not submitted yet, get choices for each question
         if (!isset($_POST['submit_module_quiz'])) {
-            foreach ($questions as &$question) {
-                $choices_stmt = $pdo->prepare("SELECT * FROM quiz_choices WHERE question_id = ? ORDER BY choice_order");
+            // Create a new array to avoid reference issues
+            $updated_questions = [];
+            foreach ($questions as $question) {
+                $choices_stmt = $pdo->prepare("SELECT * FROM quiz_choices WHERE question_id = ? ORDER BY choice_id ASC");
                 $choices_stmt->execute([$question['question_id']]);
                 $question['choices'] = $choices_stmt->fetchAll();
+                $updated_questions[] = $question;
             }
+            $questions = $updated_questions;
         }
     } elseif ($action === 'take' && isset($_GET['id'])) {
         $quizId = (int)$_GET['id'];
@@ -429,16 +427,16 @@ if (hasRole(['admin', 'manager'])) {
         // Get choices if it's a multiple choice question
         $choices = [];
         if ($question['question_type'] === 'multiple_choice') {
-            $choices_stmt = $pdo->prepare("SELECT * FROM quiz_choices WHERE question_id = ? ORDER BY choice_order");
+            $choices_stmt = $pdo->prepare("SELECT * FROM quiz_choices WHERE question_id = ? ORDER BY choice_id ASC");
             $choices_stmt->execute([$quizId]);
             $choices = $choices_stmt->fetchAll();
         }
-        
+
         // Handle answer submission
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $selected_choice_id = isset($_POST['choice_id']) ? (int)$_POST['choice_id'] : 0;
+            $selected_choice_id = isset($_POST["answers"][$question['question_id']]) ? (int)$_POST["answers"][$question['question_id']] : 0;
             $answer_text = isset($_POST['answer_text']) ? cleanInput($_POST['answer_text']) : '';
-            
+
             $is_correct = false;
             $points_earned = 0;
             
@@ -462,21 +460,32 @@ if (hasRole(['admin', 'manager'])) {
                 $is_correct = false; // Placeholder - would need actual validation
             }
             
-            // Record the answer
-            $answer_stmt = $pdo->prepare("
-                INSERT INTO user_quiz_answers (user_id, question_id, selected_choice_id, answer_text, is_correct, points_earned)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ");
-            $answer_stmt->execute([$_SESSION['user_id'], $quizId, $selected_choice_id, $answer_text, $is_correct ? 1 : 0, $points_earned]);
-            
-            // Update user's XP and points if answer is correct
-            if ($is_correct) {
-                // The trigger in the database will handle updating user XP and points
-                setAlert('success', "Jawaban benar! Anda mendapatkan {$question['xp_reward']} XP dan {$question['point_reward']} poin.");
-            } else {
-                setAlert('warning', 'Jawaban salah. Silakan coba lagi!');
+            try {
+                // Get the module_id for this question
+                $module_query = $pdo->prepare("SELECT module_id FROM quiz_questions WHERE question_id = ?");
+                $module_query->execute([$quizId]);
+                $question_data = $module_query->fetch();
+                $question_module_id = $question_data['module_id'] ?? null;
+
+                // Record the answer
+                $answer_stmt = $pdo->prepare("
+                    INSERT INTO user_quiz_answers (user_id, module_id, question_id, selected_choice_id, answer_text, is_correct, points_earned, xp_earned)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $answer_stmt->execute([$_SESSION['user_id'], $question_module_id, $quizId, $selected_choice_id, $answer_text, $is_correct ? 1 : 0, $points_earned, $question['xp_reward']]);
+
+                // Update user's XP and points if answer is correct
+                if ($is_correct) {
+                    // The trigger in the database will handle updating user XP and points
+                    setAlert('success', "Jawaban benar! Anda mendapatkan {$question['xp_reward']} XP dan {$question['point_reward']} poin.");
+                } else {
+                    setAlert('warning', 'Jawaban salah. Silakan coba lagi!');
+                }
+            } catch (PDOException $e) {
+                setAlert('error', 'Terjadi kesalahan saat menyimpan jawaban: ' . $e->getMessage());
+                error_log('Database error in single question submission: ' . $e->getMessage());
             }
-            
+
             redirect('index.php?page=games');
         }
     } elseif ($action === 'random') {
@@ -490,25 +499,25 @@ if (hasRole(['admin', 'manager'])) {
             LIMIT 1
         ");
         $question = $stmt->fetch();
-        
+
         if (!$question) {
             setAlert('error', 'Tidak ada pertanyaan kuis yang tersedia!');
             redirect('index.php?page=games');
         }
-        
+
         // Get choices if it's a multiple choice question
         $choices = [];
         if ($question['question_type'] === 'multiple_choice') {
-            $choices_stmt = $pdo->prepare("SELECT * FROM quiz_choices WHERE question_id = ? ORDER BY choice_order");
+            $choices_stmt = $pdo->prepare("SELECT * FROM quiz_choices WHERE question_id = ? ORDER BY choice_id ASC");
             $choices_stmt->execute([$question['question_id']]);
             $choices = $choices_stmt->fetchAll();
         }
-        
+
         // Handle answer submission
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $selected_choice_id = isset($_POST['choice_id']) ? (int)$_POST['choice_id'] : 0;
+            $selected_choice_id = isset($_POST["answers"][$question['question_id']]) ? (int)$_POST["answers"][$question['question_id']] : 0;
             $answer_text = isset($_POST['answer_text']) ? cleanInput($_POST['answer_text']) : '';
-            
+
             $is_correct = false;
             $points_earned = 0;
             
@@ -532,21 +541,32 @@ if (hasRole(['admin', 'manager'])) {
                 $is_correct = false; // Placeholder - would need actual validation
             }
             
-            // Record the answer
-            $answer_stmt = $pdo->prepare("
-                INSERT INTO user_quiz_answers (user_id, question_id, selected_choice_id, answer_text, is_correct, points_earned)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ");
-            $answer_stmt->execute([$_SESSION['user_id'], $question['question_id'], $selected_choice_id, $answer_text, $is_correct ? 1 : 0, $points_earned]);
-            
-            // Update user's XP and points if answer is correct
-            if ($is_correct) {
-                // The trigger in the database will handle updating user XP and points
-                setAlert('success', "Jawaban benar! Anda mendapatkan {$question['xp_reward']} XP dan {$question['point_reward']} poin.");
-            } else {
-                setAlert('warning', 'Jawaban salah. Silakan coba lagi!');
+            try {
+                // Get the module_id for this question
+                $module_query = $pdo->prepare("SELECT module_id FROM quiz_questions WHERE question_id = ?");
+                $module_query->execute([$question['question_id']]);
+                $question_data = $module_query->fetch();
+                $question_module_id = $question_data['module_id'] ?? null;
+
+                // Record the answer
+                $answer_stmt = $pdo->prepare("
+                    INSERT INTO user_quiz_answers (user_id, module_id, question_id, selected_choice_id, answer_text, is_correct, points_earned, xp_earned)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $answer_stmt->execute([$_SESSION['user_id'], $question_module_id, $question['question_id'], $selected_choice_id, $answer_text, $is_correct ? 1 : 0, $points_earned, $question['xp_reward']]);
+
+                // Update user's XP and points if answer is correct
+                if ($is_correct) {
+                    // The trigger in the database will handle updating user XP and points
+                    setAlert('success', "Jawaban benar! Anda mendapatkan {$question['xp_reward']} XP dan {$question['point_reward']} poin.");
+                } else {
+                    setAlert('warning', 'Jawaban salah. Silakan coba lagi!');
+                }
+            } catch (PDOException $e) {
+                setAlert('error', 'Terjadi kesalahan saat menyimpan jawaban: ' . $e->getMessage());
+                error_log('Database error in random question submission: ' . $e->getMessage());
             }
-            
+
             redirect('index.php?page=games');
         }
     } else {
@@ -623,21 +643,21 @@ if (hasRole(['admin', 'manager'])) {
                     <?php if ($question['question_type'] === 'multiple_choice' && isset($question['choices'])): ?>
                         <?php foreach ($question['choices'] as $choice): ?>
                             <div class="flex items-start mb-2">
-                                <input type="radio" name="question_<?php echo $question['question_id']; ?>" value="<?php echo $choice['choice_id']; ?>" id="choice_<?php echo $choice['choice_id']; ?>" required
+                                <input type="radio" name="answers[<?php echo $question['question_id']; ?>]" value="<?php echo $choice['choice_id']; ?>" id="choice_<?php echo $question['question_id']; ?>_<?php echo $choice['choice_id']; ?>" required
                                        class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
-                                <label for="choice_<?php echo $choice['choice_id']; ?>" class="ml-3 block text-gray-700">
+                                <label for="choice_<?php echo $question['question_id']; ?>_<?php echo $choice['choice_id']; ?>" class="ml-3 block text-gray-700">
                                     <?php echo htmlspecialchars($choice['choice_text']); ?>
                                 </label>
                             </div>
                         <?php endforeach; ?>
                     <?php elseif ($question['question_type'] === 'true_false'): ?>
                         <div class="flex items-start mb-2">
-                            <input type="radio" name="question_<?php echo $question['question_id']; ?>" value="1" id="true_choice_<?php echo $question['question_id']; ?>" required
+                            <input type="radio" name="answers[<?php echo $question['question_id']; ?>]" value="1" id="true_choice_<?php echo $question['question_id']; ?>" required
                                    class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
                             <label for="true_choice_<?php echo $question['question_id']; ?>" class="ml-3 block text-gray-700">Benar</label>
                         </div>
                         <div class="flex items-start mb-2">
-                            <input type="radio" name="question_<?php echo $question['question_id']; ?>" value="0" id="false_choice_<?php echo $question['question_id']; ?>" required
+                            <input type="radio" name="answers[<?php echo $question['question_id']; ?>]" value="0" id="false_choice_<?php echo $question['question_id']; ?>" required
                                    class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
                             <label for="false_choice_<?php echo $question['question_id']; ?>" class="ml-3 block text-gray-700">Salah</label>
                         </div>
@@ -686,23 +706,23 @@ if (hasRole(['admin', 'manager'])) {
         <?php if ($question['question_type'] === 'multiple_choice'): ?>
             <?php foreach ($choices as $choice): ?>
                 <div class="flex items-start">
-                    <input type="radio" name="choice_id" value="<?php echo $choice['choice_id']; ?>" id="choice_<?php echo $choice['choice_id']; ?>" required
+                    <input type="radio" name="answers[<?php echo $question['question_id']; ?>]" value="<?php echo $choice['choice_id']; ?>" id="choice_<?php echo $question['question_id']; ?>_<?php echo $choice['choice_id']; ?>" required
                            class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
-                    <label for="choice_<?php echo $choice['choice_id']; ?>" class="ml-3 block text-gray-700">
+                    <label for="choice_<?php echo $question['question_id']; ?>_<?php echo $choice['choice_id']; ?>" class="ml-3 block text-gray-700">
                         <?php echo htmlspecialchars($choice['choice_text']); ?>
                     </label>
                 </div>
             <?php endforeach; ?>
         <?php elseif ($question['question_type'] === 'true_false'): ?>
             <div class="flex items-start">
-                <input type="radio" name="choice_id" value="1" id="true_choice" required
+                <input type="radio" name="answers[<?php echo $question['question_id']; ?>]" value="1" id="true_choice_<?php echo $question['question_id']; ?>" required
                        class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
-                <label for="true_choice" class="ml-3 block text-gray-700">Benar</label>
+                <label for="true_choice_<?php echo $question['question_id']; ?>" class="ml-3 block text-gray-700">Benar</label>
             </div>
             <div class="flex items-start">
-                <input type="radio" name="choice_id" value="0" id="false_choice" required
+                <input type="radio" name="answers[<?php echo $question['question_id']; ?>]" value="0" id="false_choice_<?php echo $question['question_id']; ?>" required
                        class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">
-                <label for="false_choice" class="ml-3 block text-gray-700">Salah</label>
+                <label for="false_choice_<?php echo $question['question_id']; ?>" class="ml-3 block text-gray-700">Salah</label>
             </div>
         <?php elseif ($question['question_type'] === 'short_answer'): ?>
             <div>
